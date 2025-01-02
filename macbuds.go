@@ -72,6 +72,12 @@ func isConnected(macAddress string) (bool, error) {
 	return strings.TrimSpace(string(output)) == "1", nil
 }
 
+// Helper function to write content to a file
+func writeToFile(file *os.File, content string) error {
+	_, err := file.WriteString(content)
+	return err
+}
+
 func connectBluetooth(macAddress string) error {
 	cmd := exec.Command("blueutil", "--connect", macAddress)
 	return cmd.Run()
@@ -165,7 +171,9 @@ func onReady() {
 					continue
 				}
 				if config.MacAddress != "" {
-					tmpfile.WriteString(config.MacAddress)
+					if err := writeToFile(tmpfile, config.MacAddress); err != nil {
+						fmt.Printf("Error writing to temp file: %v\n", err)
+					}
 				}
 				tmpfile.Close()
 
@@ -257,7 +265,7 @@ func enableLaunchAtLogin() error {
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.example.macbuds</string>
+    <string>org.rc6.macbuds</string>
     <key>ProgramArguments</key>
     <array>
         <string>%s</string>
