@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/getlantern/systray"
+	"github.com/ncruces/zenity"
 )
 
 type Config struct {
@@ -72,12 +73,6 @@ func isConnected(macAddress string) (bool, error) {
 	return strings.TrimSpace(string(output)) == "1", nil
 }
 
-// Helper function to write content to a file
-func writeToFile(file *os.File, content string) error {
-	_, err := file.WriteString(content)
-	return err
-}
-
 func connectBluetooth(macAddress string) error {
 	cmd := exec.Command("blueutil", "--connect", macAddress)
 	return cmd.Run()
@@ -88,8 +83,51 @@ func disconnectBluetooth(macAddress string) error {
 	return cmd.Run()
 }
 
+func getLaunchAgentPath() string {
+	homeDir, _ := os.UserHomeDir()
+	return filepath.Join(homeDir, "Library", "LaunchAgents", "org.rc6.macbuds.plist")
+}
+
+func getExecutablePath() string {
+	exe, _ := os.Executable()
+	return exe
+}
+
+func isLaunchAtLoginEnabled() bool {
+	_, err := os.Stat(getLaunchAgentPath())
+	return err == nil
+}
+
+func enableLaunchAtLogin() error {
+	plistContent := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>org.rc6.macbuds</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>%s</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>`, getExecutablePath())
+
+	return os.WriteFile(getLaunchAgentPath(), []byte(plistContent), 0644)
+}
+
+func disableLaunchAtLogin() error {
+	err := os.Remove(getLaunchAgentPath())
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
 func onReady() {
-	// Using Unicode symbols: ✓ for connected, × for disconnected, • for unconfigured
 	systray.SetTitle("BT •")
 	systray.SetTooltip("Bluetooth Earbuds Controller")
 
@@ -164,63 +202,30 @@ func onReady() {
 				}
 
 			case <-mConfig.ClickedCh:
-				// Create a temporary file to store the MAC address
-				tmpfile, err := os.CreateTemp("", "macaddress*.txt")
+				currentMac := config.MacAddress
+				if currentMac == "" {
+					currentMac = "Enter MAC address"
+				}
+				newMac, err := zenity.Entry(
+					"Enter Bluetooth MAC Address:",
+					zenity.Title("Configure Device"),
+					zenity.EntryText(currentMac),
+				)
 				if err != nil {
-					fmt.Printf("Error creating temp file: %v\n", err)
+					if err != zenity.ErrCanceled {
+						mStatus.SetTitle(fmt.Sprintf("Error: %v", err))
+					}
 					continue
 				}
-				if config.MacAddress != "" {
-					if err := writeToFile(tmpfile, config.MacAddress); err != nil {
-						fmt.Printf("Error writing to temp file: %v\n", err)
+
+				newMac = strings.TrimSpace(newMac)
+				if newMac != config.MacAddress {
+					config.MacAddress = newMac
+					if err := saveConfig(config); err != nil {
+						mStatus.SetTitle(fmt.Sprintf("Error saving config: %v", err))
 					}
 				}
-				tmpfile.Close()
 
-				// Open the temporary file in the default text editor
-				cmd := exec.Command("open", "-t", tmpfile.Name())
-				cmd.Start()
-
-				// Wait for the file to be modified
-				go func() {
-					time.Sleep(1 * time.Second) // Wait for editor to open
-					initialStat, _ := os.Stat(tmpfile.Name())
-					initialTime := initialStat.ModTime()
-
-					// Check every second if the file has been modified
-					for {
-						time.Sleep(1 * time.Second)
-						stat, err := os.Stat(tmpfile.Name())
-						if err != nil {
-							// File might have been deleted, stop checking
-							return
-						}
-
-						if stat.ModTime() != initialTime {
-							// File was modified
-							data, err := os.ReadFile(tmpfile.Name())
-							if err != nil {
-								fmt.Printf("Error reading temp file: %v\n", err)
-								return
-							}
-
-							newMac := strings.TrimSpace(string(data))
-							if newMac != config.MacAddress {
-								config.MacAddress = newMac
-								if err := saveConfig(config); err != nil {
-									fmt.Printf("Error saving config: %v\n", err)
-								}
-							}
-
-							os.Remove(tmpfile.Name())
-							return
-						}
-					}
-				}()
-
-			case <-mQuit.ClickedCh:
-				systray.Quit()
-				return
 			case <-mLaunchAtLogin.ClickedCh:
 				if isLaunchAtLoginEnabled() {
 					if err := disableLaunchAtLogin(); err != nil {
@@ -235,6 +240,10 @@ func onReady() {
 						mLaunchAtLogin.Check()
 					}
 				}
+
+			case <-mQuit.ClickedCh:
+				systray.Quit()
+				return
 			}
 		}
 	}()
@@ -242,50 +251,6 @@ func onReady() {
 
 func onExit() {
 	// Cleanup code here
-}
-
-func getLaunchAgentPath() string {
-	homeDir, _ := os.UserHomeDir()
-	return filepath.Join(homeDir, "Library", "LaunchAgents", "org.rc6.macbuds.plist")
-}
-
-func getExecutablePath() string {
-	exe, _ := os.Executable()
-	return exe
-}
-
-func isLaunchAtLoginEnabled() bool {
-	_, err := os.Stat(getLaunchAgentPath())
-	return err == nil
-}
-
-func enableLaunchAtLogin() error {
-	plistContent := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>org.rc6.macbuds</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>%s</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <false/>
-</dict>
-</plist>`, getExecutablePath())
-
-	return os.WriteFile(getLaunchAgentPath(), []byte(plistContent), 0644)
-}
-
-func disableLaunchAtLogin() error {
-	err := os.Remove(getLaunchAgentPath())
-	if os.IsNotExist(err) {
-		return nil
-	}
-	return err
 }
 
 func main() {
