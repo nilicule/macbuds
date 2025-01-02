@@ -25,7 +25,7 @@ brew install blueutil
 
 2. Clone and build the application:
 ```bash
-git clone https://github.com/yourusername/macbuds.git
+git clone https://github.com/nilicule/macbuds.git
 cd macbuds
 go build -o macbuds
 ```
@@ -57,7 +57,7 @@ To have MacBuds start automatically when you log in:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/macbuds.git
+git clone https://github.com/nilicule/macbuds.git
 
 # Navigate to the directory
 cd macbuds
