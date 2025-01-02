@@ -66,7 +66,7 @@ cd macbuds
 go mod tidy
 
 # Build the application
-go build -o macbuds
+./build.sh 1.0.0
 ```
 
 ## License
