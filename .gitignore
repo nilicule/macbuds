@@ -1,3 +1,4 @@
 .idea/
 macbuds
 go.sum
+releases/macbuds*
