@@ -22,10 +22,9 @@ fi
 create_app_bundle() {
     local binary_path=$1
     local app_name=$2
-    local arch=$3
 
     # Create app bundle directory structure
-    local app_bundle="releases/MacBuds-$VERSION-$arch.app"
+    local app_bundle="releases/macbuds.app"
     mkdir -p "$app_bundle/Contents/MacOS"
     mkdir -p "$app_bundle/Contents/Resources"
 
@@ -70,16 +69,15 @@ EOF
     echo "Created app bundle: $app_bundle"
 }
 
-# Build for Intel Macs
-GOOS=darwin GOARCH=amd64 go build -o "releases/macbuds-$VERSION-darwin-amd64" .
-create_app_bundle "releases/macbuds-$VERSION-darwin-amd64" "MacBuds" "amd64"
-rm "releases/macbuds-$VERSION-darwin-amd64"  # Remove the standalone binary
-
-# Build for Apple Silicon Macs
+# Build only for Apple Silicon Macs
 GOOS=darwin GOARCH=arm64 go build -o "releases/macbuds-$VERSION-darwin-arm64" .
-create_app_bundle "releases/macbuds-$VERSION-darwin-arm64" "MacBuds" "arm64"
+create_app_bundle "releases/macbuds-$VERSION-darwin-arm64" "MacBuds"
 rm "releases/macbuds-$VERSION-darwin-arm64"  # Remove the standalone binary
 
-echo "Built app bundles for macOS:"
-echo "  releases/MacBuds-$VERSION-amd64.app"
-echo "  releases/MacBuds-$VERSION-arm64.app"
+# Create zip archive
+cd releases
+zip -r "MacBuds-${VERSION}.zip" macbuds.app
+cd ..
+
+echo "Built and packaged app:"
+echo "  releases/MacBuds-${VERSION}.zip"
