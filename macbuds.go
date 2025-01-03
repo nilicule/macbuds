@@ -17,6 +17,13 @@ type Config struct {
 	MacAddress string `json:"mac_address"`
 }
 
+func getBlueutilPath() string {
+	execPath, _ := os.Executable()
+	execDir := filepath.Dir(execPath)
+	// When running from .app bundle, blueutil will be in Contents/MacOS
+	return filepath.Join(execDir, "blueutil")
+}
+
 func loadConfig() (*Config, error) {
 	configDir, err := os.UserConfigDir()
 	if err != nil {
@@ -64,7 +71,7 @@ func isConnected(macAddress string) (bool, error) {
 	if macAddress == "" {
 		return false, nil
 	}
-	cmd := exec.Command("blueutil", "--is-connected", macAddress)
+	cmd := exec.Command(getBlueutilPath(), "--is-connected", macAddress)
 	output, err := cmd.Output()
 	if err != nil {
 		return false, err
@@ -74,12 +81,12 @@ func isConnected(macAddress string) (bool, error) {
 }
 
 func connectBluetooth(macAddress string) error {
-	cmd := exec.Command("blueutil", "--connect", macAddress)
+	cmd := exec.Command(getBlueutilPath(), "--connect", macAddress)
 	return cmd.Run()
 }
 
 func disconnectBluetooth(macAddress string) error {
-	cmd := exec.Command("blueutil", "--disconnect", macAddress)
+	cmd := exec.Command(getBlueutilPath(), "--disconnect", macAddress)
 	return cmd.Run()
 }
 
