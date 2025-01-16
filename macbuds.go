@@ -13,15 +13,96 @@ import (
 	"github.com/ncruces/zenity"
 )
 
+type BluetoothDevice struct {
+	Address string
+	Name    string
+}
+
 type Config struct {
 	MacAddress string `json:"mac_address"`
+	DeviceName string `json:"device_name"`
 }
 
 func getBlueutilPath() string {
+	// First try the bundled path (for production)
 	execPath, _ := os.Executable()
 	execDir := filepath.Dir(execPath)
-	// When running from .app bundle, blueutil will be in Contents/MacOS
-	return filepath.Join(execDir, "blueutil")
+	bundledPath := filepath.Join(execDir, "blueutil")
+	if _, err := os.Stat(bundledPath); err == nil {
+		return bundledPath
+	}
+
+	// If not found, try system path (for development)
+	systemPath, err := exec.LookPath("blueutil")
+	if err == nil {
+		return systemPath
+	}
+
+	// Fall back to bundled path even if it doesn't exist
+	return bundledPath
+}
+
+func getPairedDevices() ([]BluetoothDevice, error) {
+	cmd := exec.Command(getBlueutilPath(), "--paired")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute blueutil: %v", err)
+	}
+
+	var devices []BluetoothDevice
+	lines := strings.Split(string(output), "\n")
+
+	// Add debug logging
+	fmt.Printf("Found %d lines in blueutil output\n", len(lines))
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		fmt.Printf("Processing line: %s\n", line)
+
+		// Extract address - it's always at the start after "address: "
+		if !strings.Contains(line, "address: ") {
+			continue
+		}
+		parts := strings.SplitN(line[9:], ",", 2) // Skip "address: "
+		if len(parts) < 2 {
+			continue
+		}
+		address := strings.TrimSpace(parts[0])
+
+		// Extract name - it's between quotes after "name: "
+		nameIdx := strings.Index(line, "name: \"")
+		if nameIdx == -1 {
+			continue
+		}
+		nameStart := nameIdx + 7 // len("name: \"")
+		nameEnd := strings.Index(line[nameStart:], "\"")
+		if nameEnd == -1 {
+			continue
+		}
+		name := line[nameStart : nameStart+nameEnd]
+
+		// Skip empty or malformed entries
+		if address == "" || name == "" {
+			continue
+		}
+
+		fmt.Printf("Found device: %s (%s)\n", name, address)
+
+		devices = append(devices, BluetoothDevice{
+			Address: address,
+			Name:    name,
+		})
+	}
+
+	if len(devices) == 0 {
+		return nil, fmt.Errorf("no paired devices found")
+	}
+
+	return devices, nil
 }
 
 func loadConfig() (*Config, error) {
@@ -65,6 +146,11 @@ func saveConfig(config *Config) error {
 	}
 
 	return os.WriteFile(configPath, data, 0644)
+}
+
+func clearConfig() error {
+	config := &Config{}
+	return saveConfig(config)
 }
 
 func isConnected(macAddress string) (bool, error) {
@@ -151,7 +237,8 @@ func onReady() {
 	systray.AddSeparator()
 	mToggle := systray.AddMenuItem("Connect", "Toggle connection")
 	systray.AddSeparator()
-	mConfig := systray.AddMenuItem("Configure MAC Address", "Set device MAC address")
+	mSelectDevice := systray.AddMenuItem("Select Device", "Choose Bluetooth device")
+	mClearDevice := systray.AddMenuItem("Clear Selected Device", "Clear currently selected device")
 	systray.AddSeparator()
 	mLaunchAtLogin := systray.AddMenuItem("Launch at Login", "Toggle launch at login")
 	if isLaunchAtLoginEnabled() {
@@ -160,7 +247,7 @@ func onReady() {
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "Quit the application")
 
-	// Update status and menu items periodically
+	// Update status
 	go func() {
 		for {
 			connected, err := isConnected(config.MacAddress)
@@ -170,26 +257,36 @@ func onReady() {
 			}
 
 			if config.MacAddress == "" {
-				mStatus.SetTitle("Status: No device configured")
+				mStatus.SetTitle("Status: No device selected")
 				mToggle.Disable()
+				mClearDevice.Disable()
 				systray.SetTitle("BT •")
-			} else if connected {
-				mStatus.SetTitle("Status: Connected")
-				mToggle.SetTitle("Disconnect")
-				mToggle.Enable()
-				systray.SetTitle("BT ✓")
 			} else {
-				mStatus.SetTitle("Status: Disconnected")
-				mToggle.SetTitle("Connect")
-				mToggle.Enable()
-				systray.SetTitle("BT ×")
+				deviceInfo := config.DeviceName
+				if deviceInfo == "" {
+					deviceInfo = config.MacAddress
+				}
+
+				if connected {
+					mStatus.SetTitle(fmt.Sprintf("Status: Connected to %s", deviceInfo))
+					mToggle.SetTitle("Disconnect")
+					mToggle.Enable()
+					mClearDevice.Enable()
+					systray.SetTitle("BT ✓")
+				} else {
+					mStatus.SetTitle(fmt.Sprintf("Status: Disconnected from %s", deviceInfo))
+					mToggle.SetTitle("Connect")
+					mToggle.Enable()
+					mClearDevice.Enable()
+					systray.SetTitle("BT ×")
+				}
 			}
 
 			time.Sleep(2 * time.Second)
 		}
 	}()
 
-	// Handle menu item clicks
+	// Handle menu clicks
 	go func() {
 		for {
 			select {
@@ -208,29 +305,65 @@ func onReady() {
 					}
 				}
 
-			case <-mConfig.ClickedCh:
-				currentMac := config.MacAddress
-				if currentMac == "" {
-					currentMac = "Enter MAC address"
-				}
-				newMac, err := zenity.Entry(
-					"Enter Bluetooth MAC Address:",
-					zenity.Title("Configure Device"),
-					zenity.EntryText(currentMac),
-				)
+			case <-mSelectDevice.ClickedCh:
+				fmt.Println("Select Device clicked")
+				devices, err := getPairedDevices()
 				if err != nil {
-					if err != zenity.ErrCanceled {
-						mStatus.SetTitle(fmt.Sprintf("Error: %v", err))
-					}
+					fmt.Printf("Error getting paired devices: %v\n", err)
+					mStatus.SetTitle(fmt.Sprintf("Error: %v", err))
 					continue
 				}
 
-				newMac = strings.TrimSpace(newMac)
-				if newMac != config.MacAddress {
-					config.MacAddress = newMac
-					if err := saveConfig(config); err != nil {
-						mStatus.SetTitle(fmt.Sprintf("Error saving config: %v", err))
+				fmt.Printf("Found %d devices\n", len(devices))
+
+				options := make([]string, len(devices))
+				deviceMap := make(map[string]BluetoothDevice)
+				for i, device := range devices {
+					options[i] = fmt.Sprintf("%s (%s)", device.Name, device.Address)
+					deviceMap[options[i]] = device
+					fmt.Printf("Added option: %s\n", options[i])
+				}
+
+				fmt.Println("Showing selection dialog")
+				selected, err := zenity.List(
+					"Select a Bluetooth device to control:",
+					options,
+					zenity.Title("Select Bluetooth Device"),
+					zenity.Width(400),
+					zenity.Height(300),
+				)
+
+				fmt.Printf("Dialog result: %v, err: %v\n", selected, err)
+
+				if err != nil {
+					if err == zenity.ErrCanceled {
+						fmt.Println("User canceled selection")
+						continue
 					}
+					fmt.Printf("Error with selection dialog: %v\n", err)
+					mStatus.SetTitle(fmt.Sprintf("Error: %v", err))
+					continue
+				}
+
+				device := deviceMap[selected]
+				fmt.Printf("Selected device: %s (%s)\n", device.Name, device.Address)
+
+				config.MacAddress = device.Address
+				config.DeviceName = device.Name
+				if err := saveConfig(config); err != nil {
+					fmt.Printf("Error saving config: %v\n", err)
+					mStatus.SetTitle(fmt.Sprintf("Error saving config: %v", err))
+				} else {
+					fmt.Println("Config saved successfully")
+					mStatus.SetTitle(fmt.Sprintf("Device selected: %s", device.Name))
+				}
+
+			case <-mClearDevice.ClickedCh:
+				if err := clearConfig(); err != nil {
+					mStatus.SetTitle(fmt.Sprintf("Error clearing config: %v", err))
+				} else {
+					config.MacAddress = ""
+					config.DeviceName = ""
 				}
 
 			case <-mLaunchAtLogin.ClickedCh:
