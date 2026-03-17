@@ -1,11 +1,13 @@
 package main
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,14 +15,28 @@ import (
 	"github.com/ncruces/zenity"
 )
 
+//go:embed assets/icon_none.png
+var iconNoneBytes []byte
+
+//go:embed assets/icon_connected.png
+var iconConnectedBytes []byte
+
+//go:embed assets/icon_disconnected.png
+var iconDisconnectedBytes []byte
+
 type BluetoothDevice struct {
 	Address string
 	Name    string
 }
 
 type Config struct {
-	MacAddress string `json:"mac_address"`
-	DeviceName string `json:"device_name"`
+	MacAddress              string `json:"mac_address"`
+	DeviceName              string `json:"device_name"`
+	NotifyConnect           bool   `json:"notify_connect"`
+	NotifyDisconnect        bool   `json:"notify_disconnect"`
+	NotifyLowBattery        bool   `json:"notify_low_battery"`
+	LowBatteryThreshold     int    `json:"low_battery_threshold"`
+	NotificationsConfigured bool   `json:"notifications_configured"`
 }
 
 func getBlueutilPath() string {
@@ -52,16 +68,11 @@ func getPairedDevices() ([]BluetoothDevice, error) {
 	var devices []BluetoothDevice
 	lines := strings.Split(string(output), "\n")
 
-	// Add debug logging
-	fmt.Printf("Found %d lines in blueutil output\n", len(lines))
-
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-
-		fmt.Printf("Processing line: %s\n", line)
 
 		// Extract address - it's always at the start after "address: "
 		if !strings.Contains(line, "address: ") {
@@ -85,12 +96,9 @@ func getPairedDevices() ([]BluetoothDevice, error) {
 		}
 		name := line[nameStart : nameStart+nameEnd]
 
-		// Skip empty or malformed entries
 		if address == "" || name == "" {
 			continue
 		}
-
-		fmt.Printf("Found device: %s (%s)\n", name, address)
 
 		devices = append(devices, BluetoothDevice{
 			Address: address,
@@ -115,7 +123,13 @@ func loadConfig() (*Config, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &Config{}, nil
+			return &Config{
+				NotifyConnect:           true,
+				NotifyDisconnect:        true,
+				NotifyLowBattery:        true,
+				LowBatteryThreshold:     20,
+				NotificationsConfigured: true,
+			}, nil
 		}
 		return nil, err
 	}
@@ -123,6 +137,17 @@ func loadConfig() (*Config, error) {
 	var config Config
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, err
+	}
+
+	// Apply defaults for notification fields when upgrading from older config
+	if !config.NotificationsConfigured {
+		config.NotifyConnect = true
+		config.NotifyDisconnect = true
+		config.NotifyLowBattery = true
+		config.NotificationsConfigured = true
+	}
+	if config.LowBatteryThreshold == 0 {
+		config.LowBatteryThreshold = 20
 	}
 
 	return &config, nil
@@ -149,7 +174,13 @@ func saveConfig(config *Config) error {
 }
 
 func clearConfig() error {
-	config := &Config{}
+	config := &Config{
+		NotificationsConfigured: true,
+		NotifyConnect:           true,
+		NotifyDisconnect:        true,
+		NotifyLowBattery:        true,
+		LowBatteryThreshold:     20,
+	}
 	return saveConfig(config)
 }
 
@@ -174,6 +205,45 @@ func connectBluetooth(macAddress string) error {
 func disconnectBluetooth(macAddress string) error {
 	cmd := exec.Command(getBlueutilPath(), "--disconnect", macAddress)
 	return cmd.Run()
+}
+
+// normalizeMAC strips separators and lowercases a MAC address for comparison.
+func normalizeMAC(mac string) string {
+	return strings.ToLower(strings.NewReplacer(":", "", "-", "").Replace(mac))
+}
+
+func getBatteryLevel(macAddress string) (int, error) {
+	out, err := exec.Command("system_profiler", "SPBluetoothDataType").Output()
+	if err != nil {
+		return -1, err
+	}
+
+	targetMAC := normalizeMAC(macAddress)
+	inDevice := false
+
+	for _, line := range strings.Split(string(out), "\n") {
+		trimmed := strings.TrimSpace(line)
+
+		if strings.HasPrefix(trimmed, "Address:") {
+			addr := strings.TrimSpace(strings.TrimPrefix(trimmed, "Address:"))
+			inDevice = normalizeMAC(addr) == targetMAC
+		}
+
+		if inDevice && strings.HasPrefix(trimmed, "Battery Level:") {
+			val := strings.TrimSuffix(strings.TrimSpace(strings.TrimPrefix(trimmed, "Battery Level:")), "%")
+			if n, err := strconv.Atoi(val); err == nil {
+				return n, nil
+			}
+		}
+	}
+	return -1, nil
+}
+
+func sendNotification(title, message string) {
+	safeMessage := strings.ReplaceAll(message, `"`, `\"`)
+	safeTitle := strings.ReplaceAll(title, `"`, `\"`)
+	script := fmt.Sprintf(`display notification "%s" with title "%s"`, safeMessage, safeTitle)
+	exec.Command("osascript", "-e", script).Run() //nolint:errcheck
 }
 
 func getLaunchAgentPath() string {
@@ -221,46 +291,98 @@ func disableLaunchAtLogin() error {
 }
 
 func onReady() {
-	systray.SetTitle("BT •")
-	systray.SetTooltip("Bluetooth Earbuds Controller")
+	systray.SetIcon(iconNoneBytes)
+	systray.SetTitle("")
+	systray.SetTooltip("MacBuds - Bluetooth Controller")
 
 	config, err := loadConfig()
 	if err != nil {
-		fmt.Printf("Error loading config: %v\n", err)
 		systray.Quit()
 		return
 	}
 
 	// Menu items
-	mStatus := systray.AddMenuItem("Status: Unknown", "Current connection status")
+	mStatus := systray.AddMenuItem("Status: Unknown", "")
 	mStatus.Disable()
+	mBattery := systray.AddMenuItem("Battery: –", "")
+	mBattery.Disable()
 	systray.AddSeparator()
-	mToggle := systray.AddMenuItem("Connect", "Toggle connection")
+	mToggle := systray.AddMenuItem("Connect", "")
 	systray.AddSeparator()
-	mSelectDevice := systray.AddMenuItem("Select Device", "Choose Bluetooth device")
-	mClearDevice := systray.AddMenuItem("Clear Selected Device", "Clear currently selected device")
+	mSelectDevice := systray.AddMenuItem("Select Device", "")
+	mClearDevice := systray.AddMenuItem("Clear Selected Device", "")
 	systray.AddSeparator()
-	mLaunchAtLogin := systray.AddMenuItem("Launch at Login", "Toggle launch at login")
+
+	// Notifications submenu
+	mNotifications := systray.AddMenuItem("Notifications", "")
+	mNotifyConnect := mNotifications.AddSubMenuItem("Notify on connect", "")
+	mNotifyDisconnect := mNotifications.AddSubMenuItem("Notify on disconnect", "")
+	mNotifyLowBattery := mNotifications.AddSubMenuItem(
+		fmt.Sprintf("Low battery warning (< %d%%)", config.LowBatteryThreshold), "")
+	if config.NotifyConnect {
+		mNotifyConnect.Check()
+	}
+	if config.NotifyDisconnect {
+		mNotifyDisconnect.Check()
+	}
+	if config.NotifyLowBattery {
+		mNotifyLowBattery.Check()
+	}
+
+	systray.AddSeparator()
+	mLaunchAtLogin := systray.AddMenuItem("Launch at Login", "")
 	if isLaunchAtLoginEnabled() {
 		mLaunchAtLogin.Check()
 	}
 	systray.AddSeparator()
-	mQuit := systray.AddMenuItem("Quit", "Quit the application")
+	mQuit := systray.AddMenuItem("Quit", "")
 
-	// Update status
+	// Status update goroutine
 	go func() {
+		prevConnected := false
+		prevBattery := -1
+		firstRun := true
+		batteryTicker := time.NewTicker(60 * time.Second)
+		defer batteryTicker.Stop()
+
+		updateBattery := func() {
+			if config.MacAddress == "" {
+				mBattery.SetTitle("Battery: –")
+				return
+			}
+			level, _ := getBatteryLevel(config.MacAddress)
+			if level < 0 {
+				mBattery.SetTitle("Battery: –")
+				prevBattery = -1
+				return
+			}
+			mBattery.SetTitle(fmt.Sprintf("Battery: %d%%", level))
+			if !firstRun && config.NotifyLowBattery &&
+				level <= config.LowBatteryThreshold &&
+				(prevBattery > config.LowBatteryThreshold || prevBattery < 0) {
+				sendNotification("MacBuds",
+					fmt.Sprintf("%s battery is low (%d%%)", config.DeviceName, level))
+			}
+			prevBattery = level
+		}
+
+		updateBattery()
+
 		for {
 			connected, err := isConnected(config.MacAddress)
 			if err != nil {
 				mStatus.SetTitle("Status: Error")
+				firstRun = false
+				time.Sleep(2 * time.Second)
 				continue
 			}
 
 			if config.MacAddress == "" {
 				mStatus.SetTitle("Status: No device selected")
+				mBattery.SetTitle("Battery: –")
 				mToggle.Disable()
 				mClearDevice.Disable()
-				systray.SetTitle("BT •")
+				systray.SetIcon(iconNoneBytes)
 			} else {
 				deviceInfo := config.DeviceName
 				if deviceInfo == "" {
@@ -268,18 +390,33 @@ func onReady() {
 				}
 
 				if connected {
-					mStatus.SetTitle(fmt.Sprintf("Status: Connected to %s", deviceInfo))
+					mStatus.SetTitle(fmt.Sprintf("%s · Connected", deviceInfo))
 					mToggle.SetTitle("Disconnect")
 					mToggle.Enable()
 					mClearDevice.Enable()
-					systray.SetTitle("BT ✓")
+					systray.SetIcon(iconConnectedBytes)
+					if !firstRun && config.NotifyConnect && !prevConnected {
+						sendNotification("MacBuds", fmt.Sprintf("%s connected", deviceInfo))
+					}
 				} else {
-					mStatus.SetTitle(fmt.Sprintf("Status: Disconnected from %s", deviceInfo))
+					mStatus.SetTitle(fmt.Sprintf("%s · Disconnected", deviceInfo))
 					mToggle.SetTitle("Connect")
 					mToggle.Enable()
 					mClearDevice.Enable()
-					systray.SetTitle("BT ×")
+					systray.SetIcon(iconDisconnectedBytes)
+					if !firstRun && config.NotifyDisconnect && prevConnected {
+						sendNotification("MacBuds", fmt.Sprintf("%s disconnected", deviceInfo))
+					}
 				}
+				prevConnected = connected
+			}
+
+			firstRun = false
+
+			select {
+			case <-batteryTicker.C:
+				updateBattery()
+			default:
 			}
 
 			time.Sleep(2 * time.Second)
@@ -306,25 +443,19 @@ func onReady() {
 				}
 
 			case <-mSelectDevice.ClickedCh:
-				fmt.Println("Select Device clicked")
 				devices, err := getPairedDevices()
 				if err != nil {
-					fmt.Printf("Error getting paired devices: %v\n", err)
 					mStatus.SetTitle(fmt.Sprintf("Error: %v", err))
 					continue
 				}
-
-				fmt.Printf("Found %d devices\n", len(devices))
 
 				options := make([]string, len(devices))
 				deviceMap := make(map[string]BluetoothDevice)
 				for i, device := range devices {
 					options[i] = fmt.Sprintf("%s (%s)", device.Name, device.Address)
 					deviceMap[options[i]] = device
-					fmt.Printf("Added option: %s\n", options[i])
 				}
 
-				fmt.Println("Showing selection dialog")
 				selected, err := zenity.List(
 					"Select a Bluetooth device to control:",
 					options,
@@ -332,30 +463,18 @@ func onReady() {
 					zenity.Width(400),
 					zenity.Height(300),
 				)
-
-				fmt.Printf("Dialog result: %v, err: %v\n", selected, err)
-
 				if err != nil {
-					if err == zenity.ErrCanceled {
-						fmt.Println("User canceled selection")
-						continue
+					if err != zenity.ErrCanceled {
+						mStatus.SetTitle(fmt.Sprintf("Error: %v", err))
 					}
-					fmt.Printf("Error with selection dialog: %v\n", err)
-					mStatus.SetTitle(fmt.Sprintf("Error: %v", err))
 					continue
 				}
 
 				device := deviceMap[selected]
-				fmt.Printf("Selected device: %s (%s)\n", device.Name, device.Address)
-
 				config.MacAddress = device.Address
 				config.DeviceName = device.Name
 				if err := saveConfig(config); err != nil {
-					fmt.Printf("Error saving config: %v\n", err)
 					mStatus.SetTitle(fmt.Sprintf("Error saving config: %v", err))
-				} else {
-					fmt.Println("Config saved successfully")
-					mStatus.SetTitle(fmt.Sprintf("Device selected: %s", device.Name))
 				}
 
 			case <-mClearDevice.ClickedCh:
@@ -365,6 +484,33 @@ func onReady() {
 					config.MacAddress = ""
 					config.DeviceName = ""
 				}
+
+			case <-mNotifyConnect.ClickedCh:
+				config.NotifyConnect = !config.NotifyConnect
+				if config.NotifyConnect {
+					mNotifyConnect.Check()
+				} else {
+					mNotifyConnect.Uncheck()
+				}
+				saveConfig(config) //nolint:errcheck
+
+			case <-mNotifyDisconnect.ClickedCh:
+				config.NotifyDisconnect = !config.NotifyDisconnect
+				if config.NotifyDisconnect {
+					mNotifyDisconnect.Check()
+				} else {
+					mNotifyDisconnect.Uncheck()
+				}
+				saveConfig(config) //nolint:errcheck
+
+			case <-mNotifyLowBattery.ClickedCh:
+				config.NotifyLowBattery = !config.NotifyLowBattery
+				if config.NotifyLowBattery {
+					mNotifyLowBattery.Check()
+				} else {
+					mNotifyLowBattery.Uncheck()
+				}
+				saveConfig(config) //nolint:errcheck
 
 			case <-mLaunchAtLogin.ClickedCh:
 				if isLaunchAtLoginEnabled() {
