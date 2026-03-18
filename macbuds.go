@@ -390,7 +390,7 @@ func onReady() {
 				}
 
 				if connected {
-					mStatus.SetTitle(fmt.Sprintf("%s · Connected", deviceInfo))
+					mStatus.SetTitle(fmt.Sprintf("Connected: %s", deviceInfo))
 					mToggle.SetTitle("Disconnect")
 					mToggle.Enable()
 					mClearDevice.Enable()
