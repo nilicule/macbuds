@@ -7,9 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/getlantern/systray"
 	"github.com/ncruces/zenity"
@@ -34,8 +32,6 @@ type Config struct {
 	DeviceName              string `json:"device_name"`
 	NotifyConnect           bool   `json:"notify_connect"`
 	NotifyDisconnect        bool   `json:"notify_disconnect"`
-	NotifyLowBattery        bool   `json:"notify_low_battery"`
-	LowBatteryThreshold     int    `json:"low_battery_threshold"`
 	NotificationsConfigured bool   `json:"notifications_configured"`
 }
 
@@ -52,8 +48,6 @@ func loadConfig() (*Config, error) {
 			return &Config{
 				NotifyConnect:           true,
 				NotifyDisconnect:        true,
-				NotifyLowBattery:        true,
-				LowBatteryThreshold:     20,
 				NotificationsConfigured: true,
 			}, nil
 		}
@@ -69,11 +63,7 @@ func loadConfig() (*Config, error) {
 	if !config.NotificationsConfigured {
 		config.NotifyConnect = true
 		config.NotifyDisconnect = true
-		config.NotifyLowBattery = true
 		config.NotificationsConfigured = true
-	}
-	if config.LowBatteryThreshold == 0 {
-		config.LowBatteryThreshold = 20
 	}
 
 	return &config, nil
@@ -104,8 +94,6 @@ func clearConfig() error {
 		NotificationsConfigured: true,
 		NotifyConnect:           true,
 		NotifyDisconnect:        true,
-		NotifyLowBattery:        true,
-		LowBatteryThreshold:     20,
 	}
 	return saveConfig(config)
 }
@@ -113,33 +101,6 @@ func clearConfig() error {
 // normalizeMAC strips separators and lowercases a MAC address for comparison.
 func normalizeMAC(mac string) string {
 	return strings.ToLower(strings.NewReplacer(":", "", "-", "").Replace(mac))
-}
-
-func getBatteryLevel(macAddress string) (int, error) {
-	out, err := exec.Command("system_profiler", "SPBluetoothDataType").Output()
-	if err != nil {
-		return -1, err
-	}
-
-	targetMAC := normalizeMAC(macAddress)
-	inDevice := false
-
-	for _, line := range strings.Split(string(out), "\n") {
-		trimmed := strings.TrimSpace(line)
-
-		if strings.HasPrefix(trimmed, "Address:") {
-			addr := strings.TrimSpace(strings.TrimPrefix(trimmed, "Address:"))
-			inDevice = normalizeMAC(addr) == targetMAC
-		}
-
-		if inDevice && strings.HasPrefix(trimmed, "Battery Level:") {
-			val := strings.TrimSuffix(strings.TrimSpace(strings.TrimPrefix(trimmed, "Battery Level:")), "%")
-			if n, err := strconv.Atoi(val); err == nil {
-				return n, nil
-			}
-		}
-	}
-	return -1, nil
 }
 
 func sendNotification(title, message string) {
@@ -207,8 +168,6 @@ func onReady() {
 	// Menu items
 	mStatus := systray.AddMenuItem("Status: Unknown", "")
 	mStatus.Disable()
-	mBattery := systray.AddMenuItem("Battery: –", "")
-	mBattery.Disable()
 	systray.AddSeparator()
 	mToggle := systray.AddMenuItem("Connect", "")
 	systray.AddSeparator()
@@ -220,16 +179,11 @@ func onReady() {
 	mNotifications := systray.AddMenuItem("Notifications", "")
 	mNotifyConnect := mNotifications.AddSubMenuItem("Notify on connect", "")
 	mNotifyDisconnect := mNotifications.AddSubMenuItem("Notify on disconnect", "")
-	mNotifyLowBattery := mNotifications.AddSubMenuItem(
-		fmt.Sprintf("Low battery warning (< %d%%)", config.LowBatteryThreshold), "")
 	if config.NotifyConnect {
 		mNotifyConnect.Check()
 	}
 	if config.NotifyDisconnect {
 		mNotifyDisconnect.Check()
-	}
-	if config.NotifyLowBattery {
-		mNotifyLowBattery.Check()
 	}
 
 	systray.AddSeparator()
@@ -240,17 +194,14 @@ func onReady() {
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "")
 
-	// Shared state — written by the event consumer (prevConnected) and the
-	// battery ticker (prevBattery). seedState also writes prevConnected from
-	// the menu-click goroutine; concurrent menu clicks and inbound events are
-	// effectively never simultaneous (human-paced), so this stays mutex-free.
+	// prevConnected is written by the event consumer and (via seedState) by
+	// the menu-click goroutine. Concurrent menu clicks and inbound events are
+	// effectively never simultaneous at human pace, so this stays mutex-free.
 	prevConnected := false
-	prevBattery := -1
 
 	updateUIForState := func(connected bool) {
 		if config.MacAddress == "" {
 			mStatus.SetTitle("Status: No device selected")
-			mBattery.SetTitle("Battery: –")
 			mToggle.Disable()
 			mClearDevice.Disable()
 			systray.SetIcon(iconNoneBytes)
@@ -315,38 +266,6 @@ func onReady() {
 			case BluetoothConnectFailed:
 				mStatus.SetTitle("Error: connect failed")
 			}
-		}
-	}()
-
-	// Battery ticker
-	go func() {
-		ticker := time.NewTicker(60 * time.Second)
-		defer ticker.Stop()
-		firstRun := true
-		updateBattery := func() {
-			if config.MacAddress == "" {
-				mBattery.SetTitle("Battery: –")
-				return
-			}
-			level, _ := getBatteryLevel(config.MacAddress)
-			if level < 0 {
-				mBattery.SetTitle("Battery: –")
-				prevBattery = -1
-				return
-			}
-			mBattery.SetTitle(fmt.Sprintf("Battery: %d%%", level))
-			if !firstRun && config.NotifyLowBattery &&
-				level <= config.LowBatteryThreshold &&
-				(prevBattery > config.LowBatteryThreshold || prevBattery < 0) {
-				sendNotification("MacBuds",
-					fmt.Sprintf("%s battery is low (%d%%)", config.DeviceName, level))
-			}
-			prevBattery = level
-			firstRun = false
-		}
-		updateBattery()
-		for range ticker.C {
-			updateBattery()
 		}
 	}()
 
@@ -431,15 +350,6 @@ func onReady() {
 					mNotifyDisconnect.Check()
 				} else {
 					mNotifyDisconnect.Uncheck()
-				}
-				saveConfig(config) //nolint:errcheck
-
-			case <-mNotifyLowBattery.ClickedCh:
-				config.NotifyLowBattery = !config.NotifyLowBattery
-				if config.NotifyLowBattery {
-					mNotifyLowBattery.Check()
-				} else {
-					mNotifyLowBattery.Uncheck()
 				}
 				saveConfig(config) //nolint:errcheck
 
