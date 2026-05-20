@@ -66,8 +66,10 @@ cd macbuds
 go mod tidy
 
 # Build the application
-./build.sh 1.0.0
+go build -o macbuds
 ```
+
+Release artifacts (packaged `.app` zips) are produced automatically by the GitHub Actions workflow at `.github/workflows/release.yml` whenever a GitHub Release is published.
 
 ## License
 

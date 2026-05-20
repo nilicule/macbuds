@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install blueutil
+        run: brew install blueutil
+
+      - name: Build MacBuds.app
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+
+          mkdir -p MacBuds.app/Contents/MacOS MacBuds.app/Contents/Resources
+
+          GOOS=darwin GOARCH=arm64 go build -o MacBuds.app/Contents/MacOS/MacBuds .
+          chmod +x MacBuds.app/Contents/MacOS/MacBuds
+
+          cp "$(which blueutil)" MacBuds.app/Contents/MacOS/blueutil
+          chmod +x MacBuds.app/Contents/MacOS/blueutil
+
+          cat > MacBuds.app/Contents/Info.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleName</key>
+              <string>MacBuds</string>
+              <key>CFBundleDisplayName</key>
+              <string>MacBuds</string>
+              <key>CFBundleIdentifier</key>
+              <string>org.rc6.macbuds</string>
+              <key>CFBundleVersion</key>
+              <string>${VERSION}</string>
+              <key>CFBundleShortVersionString</key>
+              <string>${VERSION}</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleSignature</key>
+              <string>????</string>
+              <key>CFBundleExecutable</key>
+              <string>MacBuds</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>10.13</string>
+              <key>LSUIElement</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+
+          zip -r "MacBuds-${TAG}.zip" MacBuds.app
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: MacBuds-${{ github.event.release.tag_name }}.zip
