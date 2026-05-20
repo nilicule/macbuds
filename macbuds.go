@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/getlantern/systray"
-	"github.com/ncruces/zenity"
 )
 
 //go:embed assets/icon_none.png
@@ -297,28 +296,15 @@ func onReady() {
 					continue
 				}
 
-				options := make([]string, len(devices))
-				deviceMap := make(map[string]BluetoothDevice)
-				for i, device := range devices {
-					options[i] = fmt.Sprintf("%s (%s)", device.Name, device.Address)
-					deviceMap[options[i]] = device
-				}
-
-				selected, err := zenity.List(
-					"Select a Bluetooth device to control:",
-					options,
-					zenity.Title("Select Bluetooth Device"),
-					zenity.Width(400),
-					zenity.Height(300),
-				)
+				device, picked, err := PickDevice(devices)
 				if err != nil {
-					if err != zenity.ErrCanceled {
-						mStatus.SetTitle(fmt.Sprintf("Error: %v", err))
-					}
+					mStatus.SetTitle(fmt.Sprintf("Error: %v", err))
+					continue
+				}
+				if !picked {
 					continue
 				}
 
-				device := deviceMap[selected]
 				config.MacAddress = device.Address
 				config.DeviceName = device.Name
 				if err := saveConfig(config); err != nil {
