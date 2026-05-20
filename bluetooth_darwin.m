@@ -1,5 +1,4 @@
 #import <Foundation/Foundation.h>
-#import <AppKit/AppKit.h>
 #import <IOBluetooth/IOBluetooth.h>
 #import "bluetooth_darwin.h"
 
@@ -149,47 +148,4 @@ void bt_stop_monitoring(void) {
             [g_monitor stop];
         }
     }
-}
-
-int bt_pick_device(const bt_device_t *devices, int count,
-                   char *out_mac, int out_mac_size) {
-    if (devices == NULL || count <= 0 || out_mac == NULL || out_mac_size <= 0) {
-        return -1;
-    }
-
-    __block int result = -1;
-    __block NSInteger selectedIndex = -1;
-
-    dispatch_sync(dispatch_get_main_queue(), ^{
-        @autoreleasepool {
-            NSAlert *alert = [[NSAlert alloc] init];
-            [alert setMessageText:@"Select Bluetooth Device"];
-            [alert setInformativeText:@"Choose a device to control:"];
-            [alert addButtonWithTitle:@"OK"];
-            [alert addButtonWithTitle:@"Cancel"];
-
-            NSPopUpButton *popup = [[NSPopUpButton alloc]
-                initWithFrame:NSMakeRect(0, 0, 300, 25) pullsDown:NO];
-            for (int i = 0; i < count; i++) {
-                NSString *title = [NSString stringWithFormat:@"%s (%s)",
-                                   devices[i].name, devices[i].mac];
-                [popup addItemWithTitle:title];
-            }
-            [alert setAccessoryView:popup];
-
-            NSModalResponse response = [alert runModal];
-            if (response == NSAlertFirstButtonReturn) {
-                selectedIndex = [popup indexOfSelectedItem];
-                result = 0;
-            } else {
-                result = 1;
-            }
-        }
-    });
-
-    if (result == 0 && selectedIndex >= 0 && selectedIndex < count) {
-        strncpy(out_mac, devices[selectedIndex].mac, out_mac_size - 1);
-        out_mac[out_mac_size - 1] = '\0';
-    }
-    return result;
 }

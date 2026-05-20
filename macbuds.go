@@ -8,9 +8,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/getlantern/systray"
 )
+
+const maxDeviceSlots = 32
 
 //go:embed assets/icon_none.png
 var iconNoneBytes []byte
@@ -170,7 +173,15 @@ func onReady() {
 	systray.AddSeparator()
 	mToggle := systray.AddMenuItem("Connect", "")
 	systray.AddSeparator()
-	mSelectDevice := systray.AddMenuItem("Select Device", "")
+	mDevices := systray.AddMenuItem("Devices", "")
+	deviceSlots := make([]*systray.MenuItem, maxDeviceSlots)
+	for i := range deviceSlots {
+		deviceSlots[i] = mDevices.AddSubMenuItem("", "")
+		deviceSlots[i].Hide()
+	}
+	mDevicesSep := mDevices.AddSubMenuItem("─────────────", "")
+	mDevicesSep.Disable()
+	mRefreshDevices := mDevices.AddSubMenuItem("Refresh Devices", "")
 	mClearDevice := systray.AddMenuItem("Clear Selected Device", "")
 	systray.AddSeparator()
 
@@ -236,6 +247,65 @@ func onReady() {
 		_ = StartMonitoring(config.MacAddress)
 	}
 
+	// Devices submenu state. `paired` is read by both the device-click
+	// goroutines and the refresh handler; protected by pairedMu.
+	var pairedMu sync.Mutex
+	var paired []BluetoothDevice
+
+	refreshDeviceMenu := func() {
+		newPaired, err := PairedDevices()
+		if err != nil {
+			mStatus.SetTitle(fmt.Sprintf("Error: %v", err))
+			return
+		}
+		pairedMu.Lock()
+		defer pairedMu.Unlock()
+		paired = newPaired
+		for i, slot := range deviceSlots {
+			if i < len(paired) {
+				slot.SetTitle(fmt.Sprintf("%s (%s)", paired[i].Name, paired[i].Address))
+				slot.Show()
+				if paired[i].Address == config.MacAddress {
+					slot.Check()
+				} else {
+					slot.Uncheck()
+				}
+			} else {
+				slot.Uncheck()
+				slot.Hide()
+			}
+		}
+	}
+
+	selectDeviceByIndex := func(idx int) {
+		pairedMu.Lock()
+		if idx >= len(paired) {
+			pairedMu.Unlock()
+			return
+		}
+		d := paired[idx]
+		pairedMu.Unlock()
+
+		config.MacAddress = d.Address
+		config.DeviceName = d.Name
+		if err := saveConfig(config); err != nil {
+			mStatus.SetTitle(fmt.Sprintf("Error saving config: %v", err))
+		}
+		refreshDeviceMenu()
+		seedState()
+	}
+
+	// One click goroutine per device slot — forwards to selectDeviceByIndex.
+	for i, slot := range deviceSlots {
+		idx := i
+		s := slot
+		go func() {
+			for range s.ClickedCh {
+				selectDeviceByIndex(idx)
+			}
+		}()
+	}
+
 	// Event consumer
 	go func() {
 		for ev := range BluetoothEvents() {
@@ -268,6 +338,7 @@ func onReady() {
 		}
 	}()
 
+	refreshDeviceMenu()
 	seedState()
 
 	// Handle menu clicks
@@ -289,28 +360,8 @@ func onReady() {
 					}
 				}
 
-			case <-mSelectDevice.ClickedCh:
-				devices, err := PairedDevices()
-				if err != nil {
-					mStatus.SetTitle(fmt.Sprintf("Error: %v", err))
-					continue
-				}
-
-				device, picked, err := PickDevice(devices)
-				if err != nil {
-					mStatus.SetTitle(fmt.Sprintf("Error: %v", err))
-					continue
-				}
-				if !picked {
-					continue
-				}
-
-				config.MacAddress = device.Address
-				config.DeviceName = device.Name
-				if err := saveConfig(config); err != nil {
-					mStatus.SetTitle(fmt.Sprintf("Error saving config: %v", err))
-				}
-				seedState()
+			case <-mRefreshDevices.ClickedCh:
+				refreshDeviceMenu()
 
 			case <-mClearDevice.ClickedCh:
 				if err := clearConfig(); err != nil {
@@ -318,6 +369,7 @@ func onReady() {
 				} else {
 					config.MacAddress = ""
 					config.DeviceName = ""
+					refreshDeviceMenu()
 					seedState()
 				}
 
