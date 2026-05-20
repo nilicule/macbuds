@@ -48,9 +48,15 @@ func PairedDevices() ([]BluetoothDevice, error) {
 		return nil, fmt.Errorf("bt_paired_devices failed")
 	}
 	out := make([]BluetoothDevice, 0, n)
+	seen := make(map[string]bool, n)
 	for i := 0; i < n; i++ {
+		addr := C.GoString(&buf[i].mac[0])
+		if seen[addr] {
+			continue
+		}
+		seen[addr] = true
 		out = append(out, BluetoothDevice{
-			Address: C.GoString(&buf[i].mac[0]),
+			Address: addr,
 			Name:    C.GoString(&buf[i].name[0]),
 		})
 	}
