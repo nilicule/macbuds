@@ -11,6 +11,71 @@ static IOBluetoothDevice *deviceForMAC(const char *mac) {
     return [IOBluetoothDevice deviceWithAddressString:s];
 }
 
+// Returns an autoreleased NSString — caller retains if it needs to keep it.
+static NSString *normalizeMACString(NSString *s) {
+    return [[s stringByReplacingOccurrencesOfString:@"-" withString:@":"] lowercaseString];
+}
+
+@interface BTMonitor : NSObject {
+@public
+    IOBluetoothUserNotification *connectNotification;
+    IOBluetoothUserNotification *disconnectNotification;
+    NSString *targetMAC; // normalized: lowercase, colon-separated
+}
+- (void)startForMAC:(NSString *)mac;
+- (void)stop;
+- (void)deviceConnected:(IOBluetoothUserNotification *)note device:(IOBluetoothDevice *)d;
+- (void)deviceDisconnected:(IOBluetoothUserNotification *)note device:(IOBluetoothDevice *)d;
+@end
+
+static BTMonitor *g_monitor = nil;
+
+@implementation BTMonitor
+
+- (void)startForMAC:(NSString *)mac {
+    [self stop];
+    targetMAC = [normalizeMACString(mac) retain];
+    // System-wide connect notification — we filter to our MAC in the handler.
+    connectNotification = [[IOBluetoothDevice
+        registerForConnectNotifications:self
+        selector:@selector(deviceConnected:device:)] retain];
+    // Per-device disconnect notification.
+    IOBluetoothDevice *d = [IOBluetoothDevice deviceWithAddressString:mac];
+    if (d != nil) {
+        disconnectNotification = [[d
+            registerForDisconnectNotification:self
+            selector:@selector(deviceDisconnected:device:)] retain];
+    }
+}
+
+- (void)stop {
+    if (connectNotification != nil) {
+        [connectNotification unregister];
+        [connectNotification release];
+        connectNotification = nil;
+    }
+    if (disconnectNotification != nil) {
+        [disconnectNotification unregister];
+        [disconnectNotification release];
+        disconnectNotification = nil;
+    }
+    [targetMAC release];
+    targetMAC = nil;
+}
+
+- (void)deviceConnected:(IOBluetoothUserNotification *)note device:(IOBluetoothDevice *)d {
+    NSString *addr = normalizeMACString([d addressString]);
+    if (targetMAC != nil && [addr isEqualToString:targetMAC]) {
+        goOnBluetoothEvent(BT_EVENT_CONNECTED, [[d addressString] UTF8String]);
+    }
+}
+
+- (void)deviceDisconnected:(IOBluetoothUserNotification *)note device:(IOBluetoothDevice *)d {
+    goOnBluetoothEvent(BT_EVENT_DISCONNECTED, [[d addressString] UTF8String]);
+}
+
+@end
+
 int bt_paired_devices(bt_device_t *out, int max_count) {
     @autoreleasepool {
         NSArray<IOBluetoothDevice *> *devices = [IOBluetoothDevice pairedDevices];
@@ -69,8 +134,18 @@ int bt_disconnect(const char *mac) {
 }
 
 int bt_start_monitoring(const char *mac) {
-    (void)mac;
-    return -1;
+    @autoreleasepool {
+        if (mac == NULL) return -1;
+        if (g_monitor == nil) g_monitor = [[BTMonitor alloc] init];
+        [g_monitor startForMAC:[NSString stringWithUTF8String:mac]];
+        return 0;
+    }
 }
 
-void bt_stop_monitoring(void) {}
+void bt_stop_monitoring(void) {
+    @autoreleasepool {
+        if (g_monitor != nil) {
+            [g_monitor stop];
+        }
+    }
+}
