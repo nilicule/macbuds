@@ -20,7 +20,7 @@ The easiest way is to grab a prebuilt release:
 2. Unzip and drag `MacBuds.app` to `/Applications`.
 3. Because the app isn't code-signed, the first launch needs a right-click → **Open** to bypass Gatekeeper. After the first launch, it opens normally from the menubar.
 
-`blueutil` is bundled inside the `.app`, so no extra Homebrew install is required for end users.
+The first launch may prompt for Bluetooth permission. Grant it so MacBuds can list paired devices and trigger connect/disconnect.
 
 ## Configuration
 
@@ -51,7 +51,7 @@ Prerequisites:
 
 - macOS
 - Go 1.26 or later (matches `go.mod`)
-- [blueutil](https://github.com/toy/blueutil) — `brew install blueutil`
+- Xcode Command Line Tools (for cgo + the `IOBluetooth` framework headers)
 
 ```bash
 git clone https://github.com/nilicule/macbuds.git
@@ -61,9 +61,9 @@ go build -o macbuds
 ./macbuds
 ```
 
-When `blueutil` is not bundled next to the binary (as in a dev build), the app falls back to whatever `blueutil` is on your `PATH`.
+Dev builds run from a raw binary (not a `.app`) may have Bluetooth access attributed to the terminal app rather than MacBuds — the simplest realistic dev loop is to run the workflow-built `.app` for end-to-end testing.
 
-Release artifacts (packaged `.app` zips with `blueutil` bundled inside) are produced automatically by the GitHub Actions workflow at `.github/workflows/release.yml` whenever a GitHub Release is published.
+Release artifacts (packaged `.app` zips) are produced automatically by the GitHub Actions workflow at `.github/workflows/release.yml` whenever a GitHub Release is published.
 
 ## License
 
