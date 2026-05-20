@@ -5,46 +5,38 @@ A simple macOS menubar application to control your Bluetooth earbuds. It allows 
 ## Features
 
 - Lives in your menubar with visual connection status (✓ connected, × disconnected)
-- Quick connect/disconnect with one click
-- Configurable target device (via MAC address)
+- One-click connect/disconnect
+- Pick your target device from a list of paired Bluetooth devices
+- Live battery level for the selected device
+- Optional notifications on connect, disconnect, and low battery
 - Optional launch at login
 - Lightweight and native macOS experience
 
-## Prerequisites
-
-- macOS
-- Go 1.16 or later
-- [blueutil](https://github.com/toy/blueutil) (can be installed via Homebrew)
-
 ## Installation
 
-1. Install blueutil:
-```bash
-brew install blueutil
-```
+The easiest way is to grab a prebuilt release:
 
-2. Clone and build the application:
-```bash
-git clone https://github.com/nilicule/macbuds.git
-cd macbuds
-go build -o macbuds
-```
+1. Download the latest `MacBuds-vX.Y.Z.zip` from the [Releases page](https://github.com/nilicule/macbuds/releases).
+2. Unzip and drag `MacBuds.app` to `/Applications`.
+3. Because the app isn't code-signed, the first launch needs a right-click → **Open** to bypass Gatekeeper. After the first launch, it opens normally from the menubar.
 
-3. Run the application:
-```bash
-./macbuds
-```
+`blueutil` is bundled inside the `.app`, so no extra Homebrew install is required for end users.
 
 ## Configuration
 
-1. Find your earbuds' MAC address:
-```bash
-blueutil --paired
-```
+1. Click the menubar icon and choose **Select Device**.
+2. Pick your earbuds (or any paired Bluetooth device) from the list.
+3. Use **Connect** / **Disconnect** to toggle the connection. The icon and status line update automatically.
 
-2. Click the menubar icon and select "Configure MAC Address"
-3. Enter your device's MAC address in the text editor that opens
-4. Save and close the file
+To switch devices later, just choose **Select Device** again. **Clear Selected Device** resets the selection.
+
+### Notifications
+
+Open the **Notifications** submenu to toggle:
+
+- Notify on connect
+- Notify on disconnect
+- Low battery warning (fires when the device drops below 20%)
 
 ## Auto-start Configuration
 
@@ -55,21 +47,23 @@ To have MacBuds start automatically when you log in:
 
 ## Building from Source
 
+Prerequisites:
+
+- macOS
+- Go 1.26 or later (matches `go.mod`)
+- [blueutil](https://github.com/toy/blueutil) — `brew install blueutil`
+
 ```bash
-# Clone the repository
 git clone https://github.com/nilicule/macbuds.git
-
-# Navigate to the directory
 cd macbuds
-
-# Get dependencies
 go mod tidy
-
-# Build the application
 go build -o macbuds
+./macbuds
 ```
 
-Release artifacts (packaged `.app` zips) are produced automatically by the GitHub Actions workflow at `.github/workflows/release.yml` whenever a GitHub Release is published.
+When `blueutil` is not bundled next to the binary (as in a dev build), the app falls back to whatever `blueutil` is on your `PATH`.
+
+Release artifacts (packaged `.app` zips with `blueutil` bundled inside) are produced automatically by the GitHub Actions workflow at `.github/workflows/release.yml` whenever a GitHub Release is published.
 
 ## License
 
