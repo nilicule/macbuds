@@ -22,4 +22,10 @@ int  bt_disconnect(const char *mac);
 int  bt_start_monitoring(const char *mac);
 void bt_stop_monitoring(void);
 
+// Shows a modal NSAlert with a dropdown of devices and OK/Cancel.
+// Writes the picked MAC into out_mac on success.
+// Returns 0 on selection, 1 on cancel, -1 on error.
+int  bt_pick_device(const bt_device_t *devices, int count,
+                    char *out_mac, int out_mac_size);
+
 #endif

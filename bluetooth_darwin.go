@@ -97,3 +97,51 @@ func StartMonitoring(mac string) error {
 func StopMonitoring() {
 	C.bt_stop_monitoring()
 }
+
+// PickDevice shows a native macOS picker for the supplied devices and returns
+// the selected one. picked is false when the user cancels.
+func PickDevice(devices []BluetoothDevice) (BluetoothDevice, bool, error) {
+	if len(devices) == 0 {
+		return BluetoothDevice{}, false, nil
+	}
+
+	cDevices := make([]C.bt_device_t, len(devices))
+	for i, d := range devices {
+		mac := []byte(d.Address)
+		if len(mac) > len(cDevices[i].mac)-1 {
+			mac = mac[:len(cDevices[i].mac)-1]
+		}
+		for j, b := range mac {
+			cDevices[i].mac[j] = C.char(b)
+		}
+		cDevices[i].mac[len(mac)] = 0
+
+		name := []byte(d.Name)
+		if len(name) > len(cDevices[i].name)-1 {
+			name = name[:len(cDevices[i].name)-1]
+		}
+		for j, b := range name {
+			cDevices[i].name[j] = C.char(b)
+		}
+		cDevices[i].name[len(name)] = 0
+	}
+
+	var outMAC [32]C.char
+	r := int(C.bt_pick_device(&cDevices[0], C.int(len(cDevices)),
+		&outMAC[0], C.int(len(outMAC))))
+
+	switch r {
+	case 0:
+		mac := C.GoString(&outMAC[0])
+		for _, d := range devices {
+			if d.Address == mac {
+				return d, true, nil
+			}
+		}
+		return BluetoothDevice{}, false, fmt.Errorf("picked device not found: %s", mac)
+	case 1:
+		return BluetoothDevice{}, false, nil
+	default:
+		return BluetoothDevice{}, false, fmt.Errorf("bt_pick_device failed")
+	}
+}
