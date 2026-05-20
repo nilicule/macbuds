@@ -1,8 +1,7 @@
 package main
 
 /*
-#cgo CFLAGS: -x objective-c
-#cgo LDFLAGS: -framework IOBluetooth -framework Foundation
+#cgo LDFLAGS: -framework IOBluetooth
 #include <stdlib.h>
 #include "bluetooth_darwin.h"
 */
