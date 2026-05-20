@@ -6,8 +6,24 @@
 extern void goOnBluetoothEvent(int kind, const char *mac);
 
 int bt_paired_devices(bt_device_t *out, int max_count) {
-    (void)out; (void)max_count;
-    return -1;
+    @autoreleasepool {
+        NSArray<IOBluetoothDevice *> *devices = [IOBluetoothDevice pairedDevices];
+        if (devices == nil) {
+            return 0;
+        }
+        int count = 0;
+        for (IOBluetoothDevice *d in devices) {
+            if (count >= max_count) break;
+            NSString *addr = [d addressString] ?: @"";
+            NSString *name = [d name] ?: @"";
+            strncpy(out[count].mac, [addr UTF8String], sizeof(out[count].mac) - 1);
+            out[count].mac[sizeof(out[count].mac) - 1] = '\0';
+            strncpy(out[count].name, [name UTF8String], sizeof(out[count].name) - 1);
+            out[count].name[sizeof(out[count].name) - 1] = '\0';
+            count++;
+        }
+        return count;
+    }
 }
 
 int bt_is_connected(const char *mac) {
