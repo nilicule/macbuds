@@ -5,8 +5,9 @@ import (
 	"testing"
 )
 
-// SmokePairedDevices is a manual probe — run with: go test -run SmokePairedDevices -v
-// Prints the list of paired Bluetooth devices via the native bridge.
+// Manual probes — run with: go test -run TestSmoke -v
+// They exercise the native bridge against real paired devices.
+
 func TestSmokePairedDevices(t *testing.T) {
 	devices, err := PairedDevices()
 	if err != nil {
@@ -17,5 +18,20 @@ func TestSmokePairedDevices(t *testing.T) {
 	}
 	for _, d := range devices {
 		fmt.Printf("  %s  %s\n", d.Address, d.Name)
+	}
+}
+
+func TestSmokeIsConnected(t *testing.T) {
+	devices, err := PairedDevices()
+	if err != nil {
+		t.Fatalf("PairedDevices failed: %v", err)
+	}
+	for _, d := range devices {
+		connected, err := IsConnected(d.Address)
+		if err != nil {
+			t.Errorf("IsConnected(%s) failed: %v", d.Address, err)
+			continue
+		}
+		fmt.Printf("  %s  %s  connected=%v\n", d.Address, d.Name, connected)
 	}
 }

@@ -5,6 +5,12 @@
 // Forward declaration of the exported Go callback (defined in bluetooth_darwin.go).
 extern void goOnBluetoothEvent(int kind, const char *mac);
 
+static IOBluetoothDevice *deviceForMAC(const char *mac) {
+    if (mac == NULL) return nil;
+    NSString *s = [NSString stringWithUTF8String:mac];
+    return [IOBluetoothDevice deviceWithAddressString:s];
+}
+
 int bt_paired_devices(bt_device_t *out, int max_count) {
     @autoreleasepool {
         NSArray<IOBluetoothDevice *> *devices = [IOBluetoothDevice pairedDevices];
@@ -27,18 +33,39 @@ int bt_paired_devices(bt_device_t *out, int max_count) {
 }
 
 int bt_is_connected(const char *mac) {
-    (void)mac;
-    return -1;
+    @autoreleasepool {
+        IOBluetoothDevice *d = deviceForMAC(mac);
+        if (d == nil) return -1;
+        return [d isConnected] ? 1 : 0;
+    }
 }
 
 int bt_connect(const char *mac) {
-    (void)mac;
-    return -1;
+    @autoreleasepool {
+        IOBluetoothDevice *d = deviceForMAC(mac);
+        if (d == nil) return -1;
+        // openConnection is synchronous — run on a background queue so the
+        // Go caller and systray main loop stay responsive. On success the
+        // registered connect notification will fire; only emit a synthetic
+        // failure event here.
+        char *mac_copy = strdup(mac);
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            IOReturn r = [d openConnection];
+            if (r != kIOReturnSuccess) {
+                goOnBluetoothEvent(BT_EVENT_CONNECT_FAILED, mac_copy);
+            }
+            free(mac_copy);
+        });
+        return 0;
+    }
 }
 
 int bt_disconnect(const char *mac) {
-    (void)mac;
-    return -1;
+    @autoreleasepool {
+        IOBluetoothDevice *d = deviceForMAC(mac);
+        if (d == nil) return -1;
+        return [d closeConnection] == kIOReturnSuccess ? 0 : -1;
+    }
 }
 
 int bt_start_monitoring(const char *mac) {
