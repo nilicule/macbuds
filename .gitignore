@@ -1,6 +1,5 @@
 .idea/
 macbuds
-go.sum
 releases/macbuds*
 releases/MacBuds*
 /.claude/
