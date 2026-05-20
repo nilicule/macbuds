@@ -39,80 +39,6 @@ type Config struct {
 	NotificationsConfigured bool   `json:"notifications_configured"`
 }
 
-func getBlueutilPath() string {
-	// First try the bundled path (for production)
-	execPath, _ := os.Executable()
-	execDir := filepath.Dir(execPath)
-	bundledPath := filepath.Join(execDir, "blueutil")
-	if _, err := os.Stat(bundledPath); err == nil {
-		return bundledPath
-	}
-
-	// If not found, try system path (for development)
-	systemPath, err := exec.LookPath("blueutil")
-	if err == nil {
-		return systemPath
-	}
-
-	// Fall back to bundled path even if it doesn't exist
-	return bundledPath
-}
-
-func getPairedDevices() ([]BluetoothDevice, error) {
-	cmd := exec.Command(getBlueutilPath(), "--paired")
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute blueutil: %v", err)
-	}
-
-	var devices []BluetoothDevice
-	lines := strings.Split(string(output), "\n")
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		// Extract address - it's always at the start after "address: "
-		if !strings.Contains(line, "address: ") {
-			continue
-		}
-		parts := strings.SplitN(line[9:], ",", 2) // Skip "address: "
-		if len(parts) < 2 {
-			continue
-		}
-		address := strings.TrimSpace(parts[0])
-
-		// Extract name - it's between quotes after "name: "
-		nameIdx := strings.Index(line, "name: \"")
-		if nameIdx == -1 {
-			continue
-		}
-		nameStart := nameIdx + 7 // len("name: \"")
-		nameEnd := strings.Index(line[nameStart:], "\"")
-		if nameEnd == -1 {
-			continue
-		}
-		name := line[nameStart : nameStart+nameEnd]
-
-		if address == "" || name == "" {
-			continue
-		}
-
-		devices = append(devices, BluetoothDevice{
-			Address: address,
-			Name:    name,
-		})
-	}
-
-	if len(devices) == 0 {
-		return nil, fmt.Errorf("no paired devices found")
-	}
-
-	return devices, nil
-}
-
 func loadConfig() (*Config, error) {
 	configDir, err := os.UserConfigDir()
 	if err != nil {
@@ -182,29 +108,6 @@ func clearConfig() error {
 		LowBatteryThreshold:     20,
 	}
 	return saveConfig(config)
-}
-
-func isConnected(macAddress string) (bool, error) {
-	if macAddress == "" {
-		return false, nil
-	}
-	cmd := exec.Command(getBlueutilPath(), "--is-connected", macAddress)
-	output, err := cmd.Output()
-	if err != nil {
-		return false, err
-	}
-
-	return strings.TrimSpace(string(output)) == "1", nil
-}
-
-func connectBluetooth(macAddress string) error {
-	cmd := exec.Command(getBlueutilPath(), "--connect", macAddress)
-	return cmd.Run()
-}
-
-func disconnectBluetooth(macAddress string) error {
-	cmd := exec.Command(getBlueutilPath(), "--disconnect", macAddress)
-	return cmd.Run()
 }
 
 // normalizeMAC strips separators and lowercases a MAC address for comparison.
@@ -369,7 +272,7 @@ func onReady() {
 		updateBattery()
 
 		for {
-			connected, err := isConnected(config.MacAddress)
+			connected, err := IsConnected(config.MacAddress)
 			if err != nil {
 				mStatus.SetTitle("Status: Error")
 				firstRun = false
@@ -431,19 +334,19 @@ func onReady() {
 				if config.MacAddress == "" {
 					continue
 				}
-				connected, _ := isConnected(config.MacAddress)
+				connected, _ := IsConnected(config.MacAddress)
 				if connected {
-					if err := disconnectBluetooth(config.MacAddress); err != nil {
+					if err := Disconnect(config.MacAddress); err != nil {
 						mStatus.SetTitle(fmt.Sprintf("Error: %v", err))
 					}
 				} else {
-					if err := connectBluetooth(config.MacAddress); err != nil {
+					if err := Connect(config.MacAddress); err != nil {
 						mStatus.SetTitle(fmt.Sprintf("Error: %v", err))
 					}
 				}
 
 			case <-mSelectDevice.ClickedCh:
-				devices, err := getPairedDevices()
+				devices, err := PairedDevices()
 				if err != nil {
 					mStatus.SetTitle(fmt.Sprintf("Error: %v", err))
 					continue
