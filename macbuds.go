@@ -240,14 +240,89 @@ func onReady() {
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "")
 
-	// Status update goroutine
-	go func() {
-		prevConnected := false
-		prevBattery := -1
-		firstRun := true
-		batteryTicker := time.NewTicker(60 * time.Second)
-		defer batteryTicker.Stop()
+	// Shared state — written by the event consumer (prevConnected) and the
+	// battery ticker (prevBattery). seedState also writes prevConnected from
+	// the menu-click goroutine; concurrent menu clicks and inbound events are
+	// effectively never simultaneous (human-paced), so this stays mutex-free.
+	prevConnected := false
+	prevBattery := -1
 
+	updateUIForState := func(connected bool) {
+		if config.MacAddress == "" {
+			mStatus.SetTitle("Status: No device selected")
+			mBattery.SetTitle("Battery: –")
+			mToggle.Disable()
+			mClearDevice.Disable()
+			systray.SetIcon(iconNoneBytes)
+			return
+		}
+		deviceInfo := config.DeviceName
+		if deviceInfo == "" {
+			deviceInfo = config.MacAddress
+		}
+		if connected {
+			mStatus.SetTitle(fmt.Sprintf("Connected: %s", deviceInfo))
+			mToggle.SetTitle("Disconnect")
+			systray.SetIcon(iconConnectedBytes)
+		} else {
+			mStatus.SetTitle(fmt.Sprintf("%s · Disconnected", deviceInfo))
+			mToggle.SetTitle("Connect")
+			systray.SetIcon(iconDisconnectedBytes)
+		}
+		mToggle.Enable()
+		mClearDevice.Enable()
+	}
+
+	seedState := func() {
+		StopMonitoring()
+		if config.MacAddress == "" {
+			prevConnected = false
+			updateUIForState(false)
+			return
+		}
+		connected, _ := IsConnected(config.MacAddress)
+		prevConnected = connected
+		updateUIForState(connected)
+		_ = StartMonitoring(config.MacAddress)
+	}
+
+	// Event consumer
+	go func() {
+		for ev := range BluetoothEvents() {
+			if config.MacAddress == "" {
+				continue
+			}
+			if normalizeMAC(ev.MAC) != normalizeMAC(config.MacAddress) {
+				continue
+			}
+			deviceInfo := config.DeviceName
+			if deviceInfo == "" {
+				deviceInfo = config.MacAddress
+			}
+			switch ev.Kind {
+			case BluetoothConnected:
+				updateUIForState(true)
+				if config.NotifyConnect && !prevConnected {
+					sendNotification("MacBuds", fmt.Sprintf("%s connected", deviceInfo))
+				}
+				prevConnected = true
+			case BluetoothDisconnected:
+				updateUIForState(false)
+				if config.NotifyDisconnect && prevConnected {
+					sendNotification("MacBuds", fmt.Sprintf("%s disconnected", deviceInfo))
+				}
+				prevConnected = false
+			case BluetoothConnectFailed:
+				mStatus.SetTitle("Error: connect failed")
+			}
+		}
+	}()
+
+	// Battery ticker
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		firstRun := true
 		updateBattery := func() {
 			if config.MacAddress == "" {
 				mBattery.SetTitle("Battery: –")
@@ -267,64 +342,15 @@ func onReady() {
 					fmt.Sprintf("%s battery is low (%d%%)", config.DeviceName, level))
 			}
 			prevBattery = level
-		}
-
-		updateBattery()
-
-		for {
-			connected, err := IsConnected(config.MacAddress)
-			if err != nil {
-				mStatus.SetTitle("Status: Error")
-				firstRun = false
-				time.Sleep(2 * time.Second)
-				continue
-			}
-
-			if config.MacAddress == "" {
-				mStatus.SetTitle("Status: No device selected")
-				mBattery.SetTitle("Battery: –")
-				mToggle.Disable()
-				mClearDevice.Disable()
-				systray.SetIcon(iconNoneBytes)
-			} else {
-				deviceInfo := config.DeviceName
-				if deviceInfo == "" {
-					deviceInfo = config.MacAddress
-				}
-
-				if connected {
-					mStatus.SetTitle(fmt.Sprintf("Connected: %s", deviceInfo))
-					mToggle.SetTitle("Disconnect")
-					mToggle.Enable()
-					mClearDevice.Enable()
-					systray.SetIcon(iconConnectedBytes)
-					if !firstRun && config.NotifyConnect && !prevConnected {
-						sendNotification("MacBuds", fmt.Sprintf("%s connected", deviceInfo))
-					}
-				} else {
-					mStatus.SetTitle(fmt.Sprintf("%s · Disconnected", deviceInfo))
-					mToggle.SetTitle("Connect")
-					mToggle.Enable()
-					mClearDevice.Enable()
-					systray.SetIcon(iconDisconnectedBytes)
-					if !firstRun && config.NotifyDisconnect && prevConnected {
-						sendNotification("MacBuds", fmt.Sprintf("%s disconnected", deviceInfo))
-					}
-				}
-				prevConnected = connected
-			}
-
 			firstRun = false
-
-			select {
-			case <-batteryTicker.C:
-				updateBattery()
-			default:
-			}
-
-			time.Sleep(2 * time.Second)
+		}
+		updateBattery()
+		for range ticker.C {
+			updateBattery()
 		}
 	}()
+
+	seedState()
 
 	// Handle menu clicks
 	go func() {
@@ -379,6 +405,7 @@ func onReady() {
 				if err := saveConfig(config); err != nil {
 					mStatus.SetTitle(fmt.Sprintf("Error saving config: %v", err))
 				}
+				seedState()
 
 			case <-mClearDevice.ClickedCh:
 				if err := clearConfig(); err != nil {
@@ -386,6 +413,7 @@ func onReady() {
 				} else {
 					config.MacAddress = ""
 					config.DeviceName = ""
+					seedState()
 				}
 
 			case <-mNotifyConnect.ClickedCh:
