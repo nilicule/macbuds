@@ -16,6 +16,14 @@ static NSString *normalizeMACString(NSString *s) {
     return [[s stringByReplacingOccurrencesOfString:@"-" withString:@":"] lowercaseString];
 }
 
+// The battery level macOS shows in Bluetooth Settings comes from a selector
+// that isn't in IOBluetooth's public headers. Declare it here and probe with
+// respondsToSelector: before calling — if a future macOS drops it we report
+// "unknown" rather than crash.
+@interface IOBluetoothDevice (MacBudsBattery)
+- (unsigned char)batteryPercentSingle;
+@end
+
 @interface BTMonitor : NSObject {
 @public
     IOBluetoothUserNotification *connectNotification;
@@ -130,6 +138,21 @@ int bt_disconnect(const char *mac) {
         IOBluetoothDevice *d = deviceForMAC(mac);
         if (d == nil) return -1;
         return [d closeConnection] == kIOReturnSuccess ? 0 : -1;
+    }
+}
+
+int bt_battery(const char *mac, bt_battery_t *out) {
+    @autoreleasepool {
+        if (out == NULL) return -1;
+        out->single = -1;
+        IOBluetoothDevice *d = deviceForMAC(mac);
+        if (d == nil) return -1;
+        if (![d respondsToSelector:@selector(batteryPercentSingle)]) return 0;
+        // Disconnected and non-reporting devices both return 0, which is
+        // indistinguishable from a genuine 0% — treat it as unknown.
+        unsigned char pct = [d batteryPercentSingle];
+        if (pct > 0 && pct <= 100) out->single = (int)pct;
+        return 0;
     }
 }
 

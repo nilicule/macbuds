@@ -91,6 +91,26 @@ func Disconnect(mac string) error {
 	return nil
 }
 
+// Battery is a device's charge level. Available is false when the device
+// doesn't report one — disconnected, or simply not a battery-backed device.
+type Battery struct {
+	Percent   int
+	Available bool
+}
+
+func DeviceBattery(mac string) (Battery, error) {
+	cmac := C.CString(mac)
+	defer C.free(unsafe.Pointer(cmac))
+	var b C.bt_battery_t
+	if int(C.bt_battery(cmac, &b)) != 0 {
+		return Battery{}, fmt.Errorf("bt_battery failed")
+	}
+	if int(b.single) < 0 {
+		return Battery{}, nil
+	}
+	return Battery{Percent: int(b.single), Available: true}, nil
+}
+
 func StartMonitoring(mac string) error {
 	cmac := C.CString(mac)
 	defer C.free(unsafe.Pointer(cmac))

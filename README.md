@@ -7,7 +7,8 @@ A simple macOS menubar application to control your Bluetooth earbuds. It allows 
 - Lives in your menubar with visual connection status (✓ connected, × disconnected)
 - One-click connect/disconnect
 - Pick your target device from a list of paired Bluetooth devices
-- Optional notifications on connect and disconnect
+- Battery level for the selected device, in the menubar and the status line
+- Optional notifications on connect, disconnect, and low battery
 - Optional launch at login
 - Lightweight and native macOS experience
 
@@ -35,6 +36,18 @@ Open the **Notifications** submenu to toggle:
 
 - Notify on connect
 - Notify on disconnect
+- Notify on low battery (fires once each as the level crosses 20% and 10%)
+
+### Battery level
+
+When the selected device is connected and reports a battery level, MacBuds shows
+it next to the menubar icon and in the status line, refreshing once a minute.
+
+The level comes from `IOBluetoothDevice`, the same source macOS's own Bluetooth
+settings pane uses. The selector isn't in the public headers, so MacBuds probes
+for it at runtime and simply omits the percentage if a future macOS drops it.
+Devices that don't report a level — and any disconnected device — show no
+percentage rather than a wrong one.
 
 ## Auto-start Configuration
 

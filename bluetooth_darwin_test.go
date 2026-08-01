@@ -21,6 +21,26 @@ func TestSmokePairedDevices(t *testing.T) {
 	}
 }
 
+func TestSmokeBattery(t *testing.T) {
+	devices, err := PairedDevices()
+	if err != nil {
+		t.Fatalf("PairedDevices failed: %v", err)
+	}
+	for _, d := range devices {
+		connected, _ := IsConnected(d.Address)
+		b, err := DeviceBattery(d.Address)
+		if err != nil {
+			t.Errorf("DeviceBattery(%s) failed: %v", d.Address, err)
+			continue
+		}
+		level := "unknown"
+		if b.Available {
+			level = fmt.Sprintf("%d%%", b.Percent)
+		}
+		fmt.Printf("  %s  %-26s connected=%-5v battery=%s\n", d.Address, d.Name, connected, level)
+	}
+}
+
 func TestSmokeIsConnected(t *testing.T) {
 	devices, err := PairedDevices()
 	if err != nil {
