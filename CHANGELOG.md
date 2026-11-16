@@ -5,6 +5,15 @@ All notable changes to MacBuds are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-11-16
+
+### Security
+
+- Bump `go.opentelemetry.io/otel` (and `otel/trace`, `otel/metric`) from 1.44.0
+  to 1.47.0 to fix an `AttributeValueLengthLimit` bypass with attribute values
+  made of U+FFFD runes. The module is an indirect dependency pulled in through
+  `getlantern/systray`; MacBuds itself does not emit telemetry.
+
 ## [1.3.0] - 2026-08-01
 
 ### Added
@@ -63,6 +72,7 @@ Release automation moved to GitHub Actions.
 See the [Releases page](https://github.com/nilicule/macbuds/releases) for 1.0.0
 through 1.0.4.
 
+[1.3.1]: https://github.com/nilicule/macbuds/releases/tag/v1.3.1
 [1.3.0]: https://github.com/nilicule/macbuds/releases/tag/v1.3.0
 [1.2.0]: https://github.com/nilicule/macbuds/releases/tag/v1.2.0
 [1.1.0]: https://github.com/nilicule/macbuds/releases/tag/v1.1.0
